@@ -1,135 +1,84 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import Sidebar from '../components/Sidebar';
 import NoteView from '../components/NoteView';
 import UnlockNoteModal from '../components/UnlockNoteModal';
 import SetNotePasswordModal from '../components/SetNotePasswordModal';
 import EmptyState from '../components/EmptyState';
+import { useNotesStore } from '../store/notesStore';
+import { useModalStore, MODAL_TYPES } from '../store/modalStore';
 
 function MainApp() {
-    const [notes, setNotes] = useState([]);
-    const [allNotes, setAllNotes] = useState([]); // Todas as notas (sem filtro)
-    const [selectedNote, setSelectedNote] = useState(null);
-    const [notePassword, setNotePassword] = useState(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState(null);
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-    const [searchQuery, setSearchQuery] = useState('');
-
-    // Estados para modais
     const [noteToUnlock, setNoteToUnlock] = useState(null);
-    const [showPasswordModal, setShowPasswordModal] = useState(false);
 
+    // Store do Zustand
+    const {
+        notes,
+        allNotes,
+        selectedNote,
+        notePassword,
+        isLoading,
+        error,
+        searchQuery,
+        loadNotes,
+        createNote,
+        selectNote,
+        unlockNote,
+        updateNote,
+        deleteNote,
+        searchNotes,
+        closeNote
+    } = useNotesStore();
+
+    const { activeModal, modalProps, openModal, closeModal } = useModalStore();
+
+    // Carregar notas ao montar
     useEffect(() => {
         loadNotes();
-    }, []);
+    }, [loadNotes]);
 
-    const loadNotes = async () => {
-        try {
-            setIsLoading(true);
-            const notesList = await window.api.notes.list();
-            setNotes(notesList);
-            setAllNotes(notesList);
-        } catch (err) {
-            console.error('Error loading notes:', err);
-            setError('Erro ao carregar notas');
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    const handleSearch = useCallback(async (query) => {
-        setSearchQuery(query);
-
-        if (!query || query.trim() === '') {
-            setNotes(allNotes);
-            return;
-        }
-
-        try {
-            const results = await window.api.notes.search(query);
-            setNotes(results);
-
-            // Se nota selecionada não está nos resultados, fechar
-            if (selectedNote && !results.find(n => n.id === selectedNote.id)) {
-                setSelectedNote(null);
-                setNotePassword(null);
-            }
-        } catch (err) {
-            console.error('Error searching notes:', err);
-        }
-    }, [allNotes, selectedNote]);
-
-    const handleCreateNote = async () => {
-        setShowPasswordModal(true);
+    // Handlers
+    const handleCreateNote = () => {
+        openModal(MODAL_TYPES.SET_PASSWORD);
     };
 
     const handleConfirmPassword = async (passwordData) => {
-        setShowPasswordModal(false);
+        closeModal();
 
         try {
-            const result = await window.api.notes.create({
+            await createNote({
                 title: 'Nova Nota',
                 content: {
                     type: 'doc',
-                    content: [
-                        {
-                            type: 'paragraph',
-                        },
-                    ],
+                    content: [{ type: 'paragraph' }]
                 },
                 hasPassword: passwordData.hasPassword,
-                password: passwordData.password,
+                password: passwordData.password
             });
-
-            if (result.success) {
-                const newNotesList = [result.note, ...allNotes];
-                setAllNotes(newNotesList);
-                setNotes(newNotesList);
-
-                if (passwordData.hasPassword) {
-                    setNotePassword(passwordData.password);
-                } else {
-                    setNotePassword(null);
-                }
-
-                setSelectedNote(result.note);
-                setSearchQuery(''); // Limpar busca ao criar nota
-            }
         } catch (err) {
             console.error('Error creating note:', err);
-            setError('Erro ao criar nota');
         }
     };
 
     const handleSelectNote = async (note) => {
-        setNotePassword(null);
-
         try {
-            if (note.hasPassword) {
+            const result = await selectNote(note);
+
+            // Se retornou null, precisa de senha
+            if (result === null) {
                 setNoteToUnlock(note);
-            } else {
-                const fullNote = await window.api.notes.get(note.id);
-                setSelectedNote(fullNote);
             }
         } catch (err) {
-            console.error('Error loading note:', err);
             alert('Erro ao abrir nota');
         }
     };
 
     const handleUnlockNote = async (password) => {
         try {
-            const unlockedNote = await window.api.notes.get(noteToUnlock.id, password);
-
-            if (unlockedNote.locked) {
-                throw new Error('Senha incorreta');
-            }
-
-            setNotePassword(password);
+            await unlockNote(noteToUnlock.id, password);
             setNoteToUnlock(null);
-            setSelectedNote(unlockedNote);
         } catch (err) {
-            throw err;
+            throw err; // Propaga erro para o modal mostrar
         }
     };
 
@@ -141,25 +90,13 @@ function MainApp() {
         if (!selectedNote) return;
 
         try {
-            const result = await window.api.notes.update(
+            await updateNote(
                 selectedNote.id,
                 updates,
                 selectedNote.hasPassword ? notePassword : null
             );
-
-            if (result.success) {
-                setSelectedNote({ ...selectedNote, ...result.note });
-
-                // Atualizar em ambas as listas
-                const updateNoteInList = (list) =>
-                    list.map((n) => (n.id === selectedNote.id ? { ...n, ...result.note } : n));
-
-                setNotes(updateNoteInList(notes));
-                setAllNotes(updateNoteInList(allNotes));
-            }
         } catch (err) {
             console.error('Error updating note:', err);
-            setError('Erro ao salvar nota');
         }
     };
 
@@ -167,25 +104,10 @@ function MainApp() {
         if (!confirm('Tem certeza que deseja deletar esta nota?')) return;
 
         try {
-            await window.api.notes.delete(noteId);
-
-            const filterNotes = (list) => list.filter((n) => n.id !== noteId);
-            setNotes(filterNotes(notes));
-            setAllNotes(filterNotes(allNotes));
-
-            if (selectedNote?.id === noteId) {
-                setSelectedNote(null);
-                setNotePassword(null);
-            }
+            await deleteNote(noteId);
         } catch (err) {
             console.error('Error deleting note:', err);
-            setError('Erro ao deletar nota');
         }
-    };
-
-    const handleCloseNote = () => {
-        setSelectedNote(null);
-        setNotePassword(null);
     };
 
     const toggleSidebar = () => {
@@ -205,7 +127,7 @@ function MainApp() {
                     onToggle={toggleSidebar}
                     isLoading={isLoading}
                     error={error}
-                    onSearch={handleSearch}
+                    onSearch={searchNotes}
                     searchQuery={searchQuery}
                 />
 
@@ -228,11 +150,14 @@ function MainApp() {
                             note={selectedNote}
                             notePassword={notePassword}
                             onUpdate={handleUpdateNote}
-                            onClose={handleCloseNote}
+                            onClose={closeNote}
                             onDelete={() => handleDeleteNote(selectedNote.id)}
                         />
                     ) : (
-                        <EmptyState onCreateNote={handleCreateNote} notesCount={allNotes.length} />
+                        <EmptyState
+                            onCreateNote={handleCreateNote}
+                            notesCount={allNotes.length}
+                        />
                     )}
                 </div>
             </div>
@@ -246,10 +171,10 @@ function MainApp() {
                 />
             )}
 
-            {showPasswordModal && (
+            {activeModal === MODAL_TYPES.SET_PASSWORD && (
                 <SetNotePasswordModal
                     onConfirm={handleConfirmPassword}
-                    onCancel={() => setShowPasswordModal(false)}
+                    onCancel={closeModal}
                 />
             )}
         </>
